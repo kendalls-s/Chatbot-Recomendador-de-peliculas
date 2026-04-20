@@ -1,0 +1,137 @@
+{
+  "name": "Buscar Películas",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "4f077bc1-3152-4221-9f0d-19d165c3aed1",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        12720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "download",
+        "fileId": "1rkDVUuNIUyevwvJKr22Sx2CgPwbJF42U",
+        "options": {}
+      },
+      "id": "90db3c97-79d7-4071-bda3-589d0ee8df97",
+      "name": "Download CSV",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        12944,
+        304
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "XvuTKNwhU3VDdxA2",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "e668ca01-bdda-46e6-a342-25e445998ad2",
+      "name": "Extract CSV",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        13168,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Parámetros de entrada ─────────────────────────────────────────\nconst params = $('Execute Workflow Trigger').first().json;\n\nconst query         = (params.query    || '').toLowerCase().trim();\nconst genre         = (params.genre    || '').toLowerCase().trim();\nconst language      = (params.language || '').toLowerCase().trim();\nconst country       = (params.country  || '').toLowerCase().trim();\nconst minRating     = parseFloat(params.min_rating) || 0;\nconst maxRating     = (params.max_rating !== undefined && params.max_rating !== '') ? parseFloat(params.max_rating) : 10;\nconst minPopularity = parseFloat(params.min_popularity) || 0;\nconst maxPopularity = (params.max_popularity !== undefined && params.max_popularity !== '') ? parseFloat(params.max_popularity) : 999999;\nconst yearParam     = (params.year || '').trim();\nconst limitParam    = parseInt(params.limit) || 5;\nconst sortMode      = (params.sort_mode || '').toLowerCase().trim(); // 'worst', 'best', 'popular', 'random'\n\n// ── Umbral automático de votos ────────────────────────────────────\nconst minVotesRaw  = parseFloat(params.min_votes) || 0;\nconst autoMinVotes = minRating > 0 ? 300 : (maxRating < 10 ? 30 : 10);\nconst minVotes     = Math.max(minVotesRaw, autoMinVotes);\n\nlet results = items.map(i => i.json);\n\n// ── Descartar sin datos ───────────────────────────────────────────\nresults = results.filter(m => parseFloat(m.vote_average) > 0 && parseFloat(m.vote_count) > 0);\n\n// ── Filtros ───────────────────────────────────────────────────────\nif (genre) {\n  results = results.filter(m => m.genres && m.genres.toLowerCase().includes(genre));\n}\nif (language) {\n  results = results.filter(m => m.language && m.language.toLowerCase() === language);\n}\nif (country) {\n  results = results.filter(m => m.country && m.country.toLowerCase().includes(country));\n}\nif (minRating > 0) {\n  results = results.filter(m => parseFloat(m.vote_average) >= minRating);\n}\nif (maxRating < 10) {\n  results = results.filter(m => parseFloat(m.vote_average) <= maxRating);\n}\nif (minPopularity > 0) {\n  results = results.filter(m => parseFloat(m.popularity) >= minPopularity);\n}\nif (maxPopularity < 999999) {\n  results = results.filter(m => parseFloat(m.popularity) <= maxPopularity);\n}\n\n// ── Mínimo de votos ───────────────────────────────────────────────\nresults = results.filter(m => parseFloat(m.vote_count) >= minVotes);\n\n// ── Año ───────────────────────────────────────────────────────────\nif (yearParam) {\n  let startYear, endYear;\n  if (yearParam.includes('-')) {\n    const parts = yearParam.split('-').map(Number);\n    startYear = parts[0];\n    endYear   = parts[1];\n  } else {\n    startYear = endYear = Number(yearParam);\n  }\n  results = results.filter(m => {\n    const y = parseInt(m.release_year);\n    return !isNaN(y) && y >= startYear && y <= endYear;\n  });\n}\n\n// ── Búsqueda libre ────────────────────────────────────────────────\nif (query) {\n  results = results.filter(m =>\n    (m.title       && m.title.toLowerCase().includes(query))       ||\n    (m.description && m.description.toLowerCase().includes(query)) ||\n    (m.cast        && m.cast.toLowerCase().includes(query))        ||\n    (m.director    && m.director.toLowerCase().includes(query))\n  );\n}\n\n// ── Sin resultados ────────────────────────────────────────────────\nif (results.length === 0) {\n  return [{ json: { noResults: true } }];\n}\n\n// ── Ordenar ───────────────────────────────────────────────────────\nif (sortMode === 'random') {\n  // Aleatorio puro — Fisher-Yates shuffle\n  // Filtra mínimo 500 votos para evitar películas oscuras con rating inflado\n  const pool = results.filter(m => parseFloat(m.vote_count) >= 500);\n  const base = pool.length >= limitParam ? pool : results;\n  for (let i = base.length - 1; i > 0; i--) {\n    const j = Math.floor(Math.random() * (i + 1));\n    [base[i], base[j]] = [base[j], base[i]];\n  }\n  results = base;\n} else if (sortMode === 'worst' || maxRating < 10) {\n  // Peor primero\n  results.sort((a, b) => parseFloat(a.vote_average) - parseFloat(b.vote_average));\n} else if (sortMode === 'popular' || minPopularity > 0) {\n  // Más popular primero\n  results.sort((a, b) => parseFloat(b.popularity) - parseFloat(a.popularity));\n} else if (sortMode === 'best' || minRating > 0) {\n  // Score ponderado estilo IMDB\n  const M = 300;\n  const C = minRating > 0 ? minRating : 6;\n  results.sort((a, b) => {\n    const va = parseFloat(a.vote_count) || 0, ra = parseFloat(a.vote_average) || 0;\n    const vb = parseFloat(b.vote_count) || 0, rb = parseFloat(b.vote_average) || 0;\n    const wsA = (va/(va+M))*ra + (M/(va+M))*C;\n    const wsB = (vb/(vb+M))*rb + (M/(vb+M))*C;\n    return wsB - wsA;\n  });\n} else {\n  // Default: por rating descendente\n  results.sort((a, b) => parseFloat(b.vote_average) - parseFloat(a.vote_average));\n}\n\nresults = results.slice(0, Math.min(limitParam, 10));\n\n// ── Devolver SOLO campos necesarios y verificados ─────────────────\nreturn results.map(r => ({\n  json: {\n    title:        (r.title        || '').trim(),\n    release_year: (r.release_year || '').trim(),\n    genres:       (r.genres       || '').trim(),\n    language:     (r.language     || '').trim(),\n    country:      (r.country      || '').trim(),\n    director:     (r.director     || '').trim(),\n    cast:         (r.cast         || '').trim(),\n    description:  (r.description  || '').trim(),\n    vote_average: parseFloat(r.vote_average || 0).toFixed(1),\n    vote_count:   parseInt(r.vote_count    || 0),\n    popularity:   parseFloat(r.popularity  || 0).toFixed(1)\n  }\n}));"
+      },
+      "id": "b4a39909-5abe-43c8-b881-76960588a353",
+      "name": "Filtrar Películas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        13392,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Flujo de extraccion de datos\n\nEncargado en consultar y filtrar los datos requeridos para enviarlos al flujo principal",
+        "width": 448,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        12912,
+        496
+      ],
+      "id": "8c770cd3-54f7-4b7a-8e93-90c6cb5dec61",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download CSV": {
+      "main": [
+        [
+          {
+            "node": "Extract CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract CSV": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Películas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "3ef56e63-4449-4d4b-a96a-bc06e288f20c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9a2ca9d75c037f17e5043b5ac8f334072ce3a9d9b222721fd1bf089fa8b3e498"
+  },
+  "id": "qOLzqndGFecq33DO",
+  "tags": [
+    {
+      "updatedAt": "2026-04-18T16:51:41.547Z",
+      "createdAt": "2026-04-18T16:51:41.547Z",
+      "id": "gqhdm5HuLYl7DAsS",
+      "name": "netflix"
+    }
+  ]
+}
